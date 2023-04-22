@@ -8,9 +8,11 @@ import functools
 import os
 
 from pathlib import Path
+import sys
 from typing import Union
 
 import torchaudio
+from torchaudio import transforms
 
 from torchdata.datapipes.iter import FileOpener, HttpReader, IterableWrapper
 
@@ -61,12 +63,29 @@ def load_librispeech_item(data):
     audio_file, transcript = data
     audio_filename = os.path.splitext(os.path.basename(audio_file))[0]
     speaker_id, chapter_id, utterance_id = audio_filename.split("-")
-
+    
     # Load audio
     waveform, sample_rate = torchaudio.load(audio_file)
+    print(type(waveform)) # <class 'torch.Tensor'>
+
+    # AmplitudeToDB: Converts amplitude to decibels (dB) using a logarithmic scale1.
+    # MelScale: Computes a Mel-scale spectrogram from a waveform signal1.
+    # MelSpectrogram: Computes a Mel-scaled power spectrogram from a waveform signal1.
+    # MFCC: Computes the Mel-frequency cepstral coefficients (MFCCs) from a Mel-scaled power spectrogram1.
+    # Resample: Resamples a waveform signal to a new sample rate1.
+    # MFCC
+    mfcc = transforms.MFCC(sample_rate=sample_rate)(waveform)
+    # 4.33 GB
+    # MelSpectrogram
+    # mel_specgram = transforms.MelSpectrogram(sample_rate=sample_rate)(waveform)
+    # 13.83 GB
+    # AmplitudeToDB
+    # 21.59 GB
+    # MelScale
+    # mel_scale = transforms.MelScale()(waveform)
 
     return (
-        waveform,
+        mfcc,
         sample_rate,
         transcript,
         int(speaker_id),
@@ -119,3 +138,15 @@ def LibriSpeech(root: Union[str, Path], url: str = URL, folder_in_archive: str =
     audio_transcript_dp = audio_dp.zip_with_map(transcript_map_dp, key_fn=audio_key_fn)
 
     return audio_transcript_dp.map(load_librispeech_item)
+
+if __name__ == "__main__":
+
+    librispeech_dp = LibriSpeech(root=".")
+
+    total = 0
+
+    for i in librispeech_dp:
+        total += i[0].element_size() * i[0].nelement() + sys.getsizeof(i[1]) + sys.getsizeof(i[2]) + sys.getsizeof(i[3]) + sys.getsizeof(i[4]) + sys.getsizeof(i[5])
+        print(i)
+
+    print(f"Total size of the dataset: {total / 1024 / 1024 / 1024:.2f} GB")

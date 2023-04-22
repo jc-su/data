@@ -55,3 +55,6 @@ third_party/aws_sdk
 
 # Release Notes
 scripts/release_notes/results
+
+LibriSpeech
+train-clean-100.tar.gz
