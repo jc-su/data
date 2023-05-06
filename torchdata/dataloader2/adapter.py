@@ -114,3 +114,12 @@ class CacheTimeout(Adapter):
             cache_lock.set_timeout(self.timeout)
 
         return datapipe
+
+
+class Batch(Adapter):
+    def __init__(self, batch_size, drop_last=False):
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+
+    def __call__(self, datapipe: DataPipe) -> DataPipe:
+        return datapipe.batch(self.batch_size, drop_last=self.drop_last)
