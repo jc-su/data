@@ -191,12 +191,6 @@ class DataLoader2(Generic[T_co]):
         self._reset_seed: bool = True
         # Seed generator as of beginning of each epoch
         self._initial_seed_generator: SeedGenerator = clone(self._seed_generator)
-        # client_ip:ENV
-# for i in datapipe:
-    # rref =rref(i)
-    # rpcasnyc(rref, i)
-#     yield i
-
 
     def __iter__(self) -> DataLoader2Iterator[T_co]:
         r"""
@@ -411,3 +405,8 @@ class DataLoader2(Generic[T_co]):
                 self.datapipe = limit_fn(self.datapipe)
         else:
             warnings.warn("ReadingService doesn't support `limit`.")
+
+    
+    def record_loss(self, loss):
+        if self.reading_service is not None and isinstance(self.reading_service, CheckpointableReadingServiceInterface):
+            self.reading_service.record_loss(loss)

@@ -74,6 +74,7 @@ if __name__ == "__main__":
 
         running_loss = 0.0
         for step, data in enumerate(data_loader2):
+            # 1 base-case
             train_feature, train_label = data
             optimizer.zero_grad()
 
@@ -86,6 +87,8 @@ if __name__ == "__main__":
             if step % 2000 == 1999:
                 print("[epoch: %d, %5d] loss: %.3f" % (epoch + 1, step + 1, running_loss / 2000))
                 running_loss = 0.0
+
+                # take 10 min
 
     print("Finished Training")
 

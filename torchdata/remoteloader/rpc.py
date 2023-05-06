@@ -17,7 +17,7 @@ import torch
 from tblib import pickling_support
 
 # absolute import required for unpickling
-from rpcdataloader.utils import pkl_dispatch_table
+from utils import pkl_dispatch_table
 
 pickling_support.install()
 
