@@ -7,5 +7,6 @@ class Controller:
         self.completed_queue = ThreadingQueue("completed")
         self.workers = [threading.Thread(target=self.worker_function) for _ in range(num_workers)]
 
+    def start(self):
         for worker in self.workers:
             worker.start()
