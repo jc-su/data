@@ -63,7 +63,5 @@ class GPUAgent(AgentInterface):
 
 if __name__ == '__main__':
     system_agent = SystemAgent(monitor_interval=1)
-    gpu_agent = GPUAgent()
 
-    system_agent.monitor()
-    gpu_agent.monitor()
+    print(system_agent.monitor())
