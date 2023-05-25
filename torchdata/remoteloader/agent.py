@@ -1,6 +1,7 @@
 import time
 import psutil
 from pynvml import *
+import queue
 
 class AgentInterface:
     def __init__(self, monitor_interval=1):
@@ -9,10 +10,19 @@ class AgentInterface:
     def get_status(self):
         pass
 
-    def monitor(self):
+    def start_monitor_thread(self):
+        # start a new thread monitoring the status
+        self.monitor_thread = threading.Thread(target=self._monitor, daemon=True)
+        self.monitor_thread.start()
+
+    def _monitor(self):
         while True:
-            status = self.get_status()
-            print(status)
+            self.status = self.get_status()
+            time.sleep(self.monitor_interval)
+    
+    def record(self, status):
+        while True:
+            status.append(self.get_status())
             time.sleep(self.monitor_interval)
 
 

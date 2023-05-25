@@ -14,6 +14,7 @@ from torchdata.datapipes.iter.util.cacheholder import _WaitPendingCacheItemIterD
 
 __all__ = [
     "Adapter",
+    "Batch",
     "CacheTimeout",
     "Shuffle",
 ]
