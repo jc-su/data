@@ -1,7 +1,6 @@
 import time
 import psutil
 from pynvml import *
-import queue
 
 class AgentInterface:
     def __init__(self, monitor_interval=1):

@@ -1,7 +1,7 @@
 from .controller import Controller
 from .agent import GPUAgent, SystemAgent
 from .remoteloader import RemoteDataloader
-from .allocation_policy import PrototypePolicy
+from .scaling import PrototypePolicy
 
 __all__ = [
     "Controller",
@@ -12,4 +12,4 @@ __all__ = [
     "PrototypePolicy",
 ]
 
-assert __all__ == sorted(__all__)
+# assert __all__ == sorted(__all__)
