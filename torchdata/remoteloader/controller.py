@@ -45,16 +45,16 @@ class Controller:
             message = self.incoming_queue.get()
             print(message["type"], message["id"])
             if message["type"] == "init":
-                self.hash_table[message["id"]] = {}
+                self.hash_table[message["id"]] = []
                 self.hash_table[message["id"]]["status"] = []
                 self.hash_table[message["id"]]["loss"] = []
                 self.hash_table[message["id"]]["time"] = []
             elif message["type"] == "status_update":
                 self.hash_table[message["id"]].append({"batch_size": message["batch_size"], "num_workers": message["num_workers"]})
             elif message["type"] == "loss_update":
-                self.hash_table[message["id"]].append({"loss": message["loss"]})
+                self.hash_table[message["id"]]["loss"].append({"loss": message["loss"]})
             elif message["type"] == "time_update":
-                self.hash_table[message["id"]].append({"time": message["time"]})
+                self.hash_table[message["id"]]["time"].append({"time": message["time"]})
             elif message["type"] == "new":
                 spawn_worker(message["id"], "localhost", "5555", "localhost", "5556")
             else:
@@ -68,7 +68,7 @@ class Controller:
             # for i in new_dp:
             #     print(i)
 
-            self.completed_queue.put(message)
+            self.completed_queue.put(message["id"])
 
     def _get_completed_task(self, block=True, timeout=0):
         return self.completed_queue.get(block, timeout)
@@ -83,7 +83,7 @@ class Controller:
         shards = np.array_split(data_list, _num_workers)
         return shards
 
-    def remove_dp(self, _datapipe):
+    def get_filelist_dp(self, _datapipe):
         def recursive_remove(graph):
             for _, value in graph.items():
                 if value[0].__str__() == "ShardingFilterIterDataPipe":
