@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import mmap
 import os
 
 from typing import Any, Callable, Iterator, Optional, Tuple, Union
@@ -36,8 +37,12 @@ class HierarchyCacheIterDataPipe(IterDataPipe[str]):
                 raise Exception("Unknown data id")
             if not os.path.exists(cache_path):
                 os.makedirs(cache_path)
+            # with open(os.path.join(cache_path, "data"), "wb") as f:
+            #     f.write(dill.dumps(data))
+            # mmmap write
             with open(os.path.join(cache_path, "data"), "wb") as f:
-                f.write(dill.dumps(data))
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_WRITE) as m:
+                    m.write(dill.dumps(data))
 
             yield cache_path
 

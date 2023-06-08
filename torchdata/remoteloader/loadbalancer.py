@@ -6,12 +6,7 @@ from queue import Queue
 
 class LoadBalancer:
     def __init__(self):
-        self.context = zmq.Context()
-        self.frontend = self.context.socket(zmq.ROUTER)
-        self.frontend.bind("tcp://*:5555")
-
-        self.backend = self.context.socket(zmq.ROUTER)
-        self.backend.bind("tcp://*:5556")
+        self.proxy()
 
         self.available_workers = set()
         self.worker_heartbeat = {}
@@ -65,3 +60,20 @@ class LoadBalancer:
         monitor_thread.join()
         route_thread.join()
         backend_thread.join()
+
+    def data_plane_proxy(self):
+        context = zmq.Context()
+        data_plane_frontend = context.socket(zmq.PULL)
+        data_plane_frontend.bind("tcp://*:2000")
+        data_plane_frontend.set_hwm(1)
+        
+        
+        data_plane_backend = context.socket(zmq.PUSH)
+        data_plane_backend.bind("tcp://*:3000")
+        data_plane_backend.set_hwm(1)
+        
+        zmq.proxy(data_plane_frontend, data_plane_backend)
+
+
+if __name__ == "__main__":
+    lb = LoadBalancer()

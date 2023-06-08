@@ -1,9 +1,9 @@
 import base64
 import threading
+import time
 
 import dill
 import numpy as np
-import scaling
 import zmq
 from torch.utils.data.graph import traverse_dps, traverse
 
@@ -11,7 +11,7 @@ from torchdata.dataloader2.communication.queue import (LocalQueue,
                                                        ThreadingQueue)
 from torchdata.dataloader2.graph import find_dps, replace_dp
 from torchdata.datapipes.iter import IterDataPipe, Filter
-from utils import find_dp, spawn_worker
+from .utils import find_dp, spawn_worker
 
 
 class Controller:
@@ -22,43 +22,74 @@ class Controller:
         self.incoming_queue = ThreadingQueue("incoming")
         self.completed_queue = ThreadingQueue("completed")
         self.incoming_counter = 0
-        self.process_len = 2
+        self.req_len = 2
         self.hash_table = {}
 
     def start(self):
+        start_time = time.time()
         while True:
             # Wait for the next request from the client
             message = self.socket.recv_pyobj()
+            print("Sending back a message")
             self.socket.send_pyobj({"status": "OK"})
 
             self.incoming_queue.put(message)
             self.incoming_counter += 1
 
-            # Check if it's time to process the batch of 10 requests
-            if self.incoming_counter % self.process_len == 0:
-                # self.process_requests()
-                # # start a new thread
+            elapsed_time = time.time() - start_time
+
+            # If the batch size has been reached or 10 seconds have passed, process the batch
+            if self.incoming_counter % self.req_len == 0 or elapsed_time >= 10:
                 threading.Thread(target=self.process_requests).start()
+                # self.process_requests()
+                start_time = time.time()  # Reset the start time
 
     def process_requests(self):
-        for _ in range(self.process_len):
+        def init_handler(message):
+            id = message["id"]
+            if id not in self.hash_table:
+                self.hash_table[id] = {}
+                self.hash_table[id]["gpu_status"] = []
+                self.hash_table[id]["loss"] = []
+                self.hash_table[id]["compute_time"] = []
+                self.hash_table[id]["datapipe"] = message["datapipe"]
+                self.hash_table[id]["worker_list"] = []
+                if "num_worker" in message:
+                    self.hash_table[id]["num_worker"] = message["num_worker"]
+
+        def status_update_handler(message):
+            self.hash_table[message["id"]]["gpu_status"].extend(message["gpu_status"])
+
+        def loss_update_handler(message):
+            self.hash_table[message["id"]]["loss_info"].extend(message["loss_info"])
+
+        def compute_time_update_handler(message):
+            self.hash_table[message["id"]]["compute_time_info"].extend(message["compute_time_info"])
+
+        def forward_dp_handler(message):
+            context = zmq.Context()
+            socket = context.socket(zmq.REQ)
+            socket.connect(f"tcp://{message['ip']}:{message['port']}")
+            socket.send_pyobj(message["datapipe"])
+
+        message_handlers = {
+            "init": init_handler,
+            "status_update": status_update_handler,
+            "loss_update": loss_update_handler,
+            "time_update": compute_time_update_handler,
+            "forward_dp": forward_dp_handler
+        }
+
+        for _ in range(self.req_len):
             message = self.incoming_queue.get()
-            print(message["type"], message["id"])
-            if message["type"] == "init":
-                self.hash_table[message["id"]] = []
-                self.hash_table[message["id"]]["status"] = []
-                self.hash_table[message["id"]]["loss"] = []
-                self.hash_table[message["id"]]["time"] = []
-            elif message["type"] == "status_update":
-                self.hash_table[message["id"]].append({"batch_size": message["batch_size"], "num_workers": message["num_workers"]})
-            elif message["type"] == "loss_update":
-                self.hash_table[message["id"]]["loss"].append({"loss": message["loss"]})
-            elif message["type"] == "time_update":
-                self.hash_table[message["id"]]["time"].append({"time": message["time"]})
-            elif message["type"] == "new":
-                spawn_worker(message["id"], "localhost", "5555", "localhost", "5556")
+            message_type = message["type"]
+            print(f"Processing {message_type} from {message['id']}")
+
+            handler = message_handlers.get(message_type)
+            if handler is not None:
+                handler(message)
             else:
-                raise Exception("Unknown message type")
+                raise Exception(f"Unknown message type: {message_type}")
             # dp = dill.loads(message["datapipe"])
             # list_dp = dill.loads(message["list_datapipe"])
             # # print(self.remove_dp(dp))
@@ -101,7 +132,6 @@ class Controller:
                 dps.append(dp)
                 helper(src_graph)
         graph = traverse_dps(_datapipe)
-        # {ls: (dp, {ls: (dp, {ls: (dp, {})})})}
         return recursive_remove(graph)
 
     def insert_dp(self, _datapipe, _list, _list_datapipe):
@@ -114,9 +144,6 @@ class Controller:
         )
 
         return new_dp
-
-    def _sharding(self, _list, _num_workers):
-        return scaling.sharding(_list, _num_workers)
 
 
 if __name__ == "__main__":

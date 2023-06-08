@@ -118,6 +118,10 @@ def get_service_ip_and_ports(service_name, namespace):
     return ip, ports
 
 
+def spawm_worker_sim():
+    pass
+
+
 if __name__ == "__main__":
     end_time = time.time()
     start_time = end_time - 20
