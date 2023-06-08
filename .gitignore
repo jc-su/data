@@ -58,3 +58,4 @@ scripts/release_notes/results
 
 LibriSpeech
 train-clean-100.tar.gz
+*.pkl
