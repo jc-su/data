@@ -11,6 +11,8 @@ from torchdata.dataloader2 import MultiProcessingReadingService, DataLoader2
 from torchdata.datapipes.iter import IterableWrapper
 from torchdata.remoteloader import RemoteDataloader, Worker
 
+import hashlib
+
 
 def apply_transform(data):
     cal_transform = transforms.Compose([
@@ -29,7 +31,7 @@ def decode(item):
         decoder = imagehandler("pil")
         image = decoder("jpg", value.read())
         cls = int(os.path.split(os.path.dirname(key))[1].split(".")[0])
-        id = os.path.basename(key).split(".")
+        id = hashlib.md5(key.encode()).hexdigest()
     else:
         raise ValueError("Unknown file type: " + key)
 
@@ -54,22 +56,23 @@ def Caltech256(_path):
 
     return dp
 
-def ImportaceSampler(rank_info, num_samples, replacement=False):
-    # rank_info: list of rank tensor
-    import numpy as np
-    rank_info = np.concatenate(rank_info)
-
 
 
 def cal_loss_rank(loss_tensor):
-    total_sum, sublist_sums = loss_tensor.sum(), loss_tensor.sum(dim=1)
-    rank_tensor = (loss_tensor.view(-1) * total_sum) / sublist_sums.repeat(loss_tensor.size(1))
-    return rank_tensor.argsort().detach().cpu().numpy()
+    # total_sum, sublist_sums = loss_tensor.sum(), loss_tensor.sum(dim=1)
+    # rank_tensor = (loss_tensor.view(-1) * total_sum) / sublist_sums.repeat(loss_tensor.size(1))
+    total_sum, sublist_sums = loss_tensor.sum(), loss_tensor.sum(dim=1, keepdim=True)
+
+    loss_tensor.div_(sublist_sums) # equivalent to loss_tensor = loss_tensor / sublist_sums
+
+    # Multiply total_sum
+    rank_tensor = loss_tensor.mul_(total_sum) # equivalent to rank_tensor = loss_tensor * total_sum
+    return rank_tensor
 
 if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     data_path = "/home/jcsu/Dev/motivation/dataset/256_ObjectCategories"
-    rs = MultiProcessingReadingService(num_workers=8)
+    rs = MultiProcessingReadingService(num_workers=2)
     dl = DataLoader2(
         Caltech256(data_path),
         reading_service=rs,
@@ -111,11 +114,14 @@ if __name__ == "__main__":
 
             scaler.step(optimizer)
             scaler.update()
+        # loss_tensor = torch.stack(loss_list)
         loss_tensor = torch.stack(loss_list)
-        rank_info = cal_loss_rank(loss_tensor)
+        loss_relatively = cal_loss_rank(loss_tensor).detach().cpu().numpy()
+        print(loss_relatively)
+        rank_info = cal_loss_rank(loss_tensor).argsort().detach().cpu().numpy()
         # zip(id_list, rank_tensor)
         import dill
         dill.dump(id_list, open(f"loss_time_archive/id_list_{epoch}.pkl", "wb"))
-        dill.dump(loss_tensor.detach().cpu().numpy(), open(f"loss_time_archive/loss_tensor_{epoch}.pkl", "wb"))
+        dill.dump(loss_relatively, open(f"loss_time_archive/loss_tensor_{epoch}.pkl", "wb"))
         dill.dump(compute_time_list, open(f"loss_time_archive/compute_time_list_{epoch}.pkl", "wb"))
         dill.dump(rank_info, open(f"loss_time_archive/rank_info_{epoch}.pkl", "wb"))

@@ -3,6 +3,7 @@ import operator
 import os
 import threading
 import time
+from contextlib import contextmanager
 from functools import reduce
 from typing import Iterable, Optional, Union
 
@@ -14,10 +15,8 @@ from torchdata.dataloader2 import DataLoader2
 from torchdata.dataloader2.adapter import Adapter
 from torchdata.dataloader2.graph import DataPipe, traverse_dps
 from torchdata.dataloader2.reading_service import ReadingServiceInterface
-from contextlib import contextmanager
 
 from .agent import GPUAgent
-from .utils import get_local_ip
 
 dill.settings['recurse'] = True
 
@@ -56,8 +55,6 @@ class RemoteDataloader(DataLoader2):
         # serialize_datapipe(self.datapipe) as id
         self.dp_id = hashlib.sha1(dill.dumps(traverse_dps(self.datapipe))).hexdigest()
 
-        self.local_ip = get_local_ip()
-        self.local_port = os.environ.get("PORT")
         self.controller_ip = os.environ.get("CONTROLLER_IP")
         self.controller_port = os.environ.get("CONTROLLER_PORT")
 
@@ -150,7 +147,7 @@ class RemoteDataloader(DataLoader2):
         start = time.time()
         yield
         end = time.time()
-        self.compute_time_info[key] = end - start
+        self.compute_time_list.append((key, end - start))
 
     def _send_to_controller(self, message):
         self.controller_skt.send_pyobj(message, flags=zmq.NOBLOCK)
