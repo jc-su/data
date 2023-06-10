@@ -1,4 +1,6 @@
+from ast import List
 import os
+from torch import Generator
 import zmq
 import redis
 from itertools import zip_longest
@@ -13,6 +15,13 @@ from collections import OrderedDict
 
 
 class LRU_Cache:
+    r"""
+    LRU_Cache is a LRU cache that can be used in the dispatcher nvme cache.
+
+    Args:
+        capacity: The capacity of the cache.
+    """
+
     def __init__(self, capacity):
         self.cache = OrderedDict()
         self.capacity = capacity
@@ -36,6 +45,13 @@ class LRU_Cache:
 
 
 class Dispatcher:
+    r"""
+    Dispatcher is a dispatcher that can be used to dispatch cache to trainer and shard data to workers.
+
+    Args:
+        message: The message to dispatch.
+    """
+
     def __init__(self, massage):
         self.content = massage
         self.total_batch_size = sum(worker['batch_size'] for worker in test_message['preprocessing_services'].values())
@@ -49,38 +65,34 @@ class Dispatcher:
         self.nvme_cache_uuid = f"nvme-{uuid.uuid4()}".encode("utf-8")
 
     def dispatch_to_trainer(self, drop_last=False):
-        hitted_files_id = []
-        redis_remain_files, nvme_remain_objects = [], []
-        redis_cache_gen = self.redis_cache_exists(self.content["file_hash_list"])
         print(f"init file list lenght: {len(self.content['file_hash_list'])}")
-        for batch in redis_cache_gen:
-
-            hitted_files_id.extend(batch)
-            if len(batch) < self.total_batch_size:
-                redis_remain_files.extend(batch)
-                break
-            print(f"Sending redis cache to trainer, batch size: {len(batch)}")
-        hitted_files_set = set(hitted_files_id)
-        self.content["file_hash_list"] = [file for file in self.content["file_hash_list"] if file not in hitted_files_set]
-
-        nvme_cache_gen = self.nvme_cache_exists(self.content["file_hash_list"])
+        hitted_files_id, redis_remain_files = self.dispatch_cache_to_trainer(self.redis_cache_exists(self.content["file_hash_list"]), "redis")
+        self.update_file_hash_list(hitted_files_id)
 
         print(f"remain file list lenght: {len(self.content['file_hash_list'])}")
-        for batch in nvme_cache_gen:
-            hitted_files_id.extend(batch)
-            if len(batch) < self.total_batch_size:
-                nvme_remain_objects.extend(batch)
-                break
-            print(f"Sending nvme cache to trainer, batch size: {len(batch)}")
+        hitted_files_id, nvme_remain_files = self.dispatch_cache_to_trainer(self.nvme_cache_exists(self.content["file_hash_list"]), "nvme")
+        self.update_file_hash_list(hitted_files_id)
 
-        hitted_files_set = set(hitted_files_id)
-        self.content["file_hash_list"] = [file for file in self.content["file_hash_list"] if file not in hitted_files_set]
-
-        if not drop_last and len(redis_remain_files) + len(nvme_remain_objects) >= self.total_batch_size:
+        if not drop_last and len(redis_remain_files) + len(nvme_remain_files) >= self.total_batch_size:
             redis_remain_objects = self.redis_client.mget(redis_remain_files)
-            last_batch = redis_remain_objects + nvme_remain_objects
+            last_batch = redis_remain_objects + nvme_remain_files
             last_batch = last_batch[:self.total_batch_size]
             print(f"Sending last batch to trainer, batch size: {len(last_batch)}")
+
+    def dispatch_cache_to_trainer(self, cache_gen: Generator, cache_type: str) -> List:
+        hitted_files_id = []
+        remain_files = []
+        for batch in cache_gen:
+            hitted_files_id.extend(batch)
+            if len(batch) < self.total_batch_size:
+                remain_files.extend(batch)
+                break
+            print(f"Sending {cache_type} cache to trainer, batch size: {len(batch)}")
+        return hitted_files_id, remain_files
+
+    def update_file_hash_list(self, hitted_files_id: List) -> None:
+        hitted_files_set = set(hitted_files_id)
+        self.content["file_hash_list"] = [file for file in self.content["file_hash_list"] if file not in hitted_files_set]
 
     def dispatch_to_worker(self):
         shard = self._sharding(self.content["file_hash_list"])
@@ -223,6 +235,8 @@ if __name__ == '__main__':
 
     print(len([i for i in file_hash_list if i in nvme_cached_key]))
     print(f"Total number of files: {len(test_message['file_hash_list'])}, searching for cached files in Redis with {len(redis_cached_key)} keys and in NVME with {len(nvme_cached_key)} keys")
-
+    import time
+    start = time.time()
     dispat = Dispatcher(test_message)
     dispat.start_dispatching()
+    print(f"Total time: {time.time() - start}")
