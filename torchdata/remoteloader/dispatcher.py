@@ -37,18 +37,56 @@ class LRU_Cache:
 
 class Dispatcher:
     def __init__(self, massage):
-        self.massage = massage
+        self.content = massage
         self.total_batch_size = sum(worker['batch_size'] for worker in test_message['preprocessing_services'].values())
-        ctx = zmq.Context()
-        self.skt = ctx.socket(zmq.REQ)
-        self.skt.connect(f"tcp://localhost:2000")
-        self.redis_client = redis.Redis(host='localhost', port=6379, db=0)
+        # ctx = zmq.Context()
+        # self.skt = ctx.socket(zmq.PUSH)
+        # self.skt.connect(f"tcp://localhost:2000")
+        self.redis_client = redis.Redis(host="localhost", port=6379, db=0)
+        self.nvme_cache_directory = os.environ.get("NVME_CACHE_DIRECTORY")
 
-    def dispatch_to_trainer(self, trainer, files):
-        pass
+        self.redis_cache_uuid = f"redis-{uuid.uuid4()}".encode("utf-8")
+        self.nvme_cache_uuid = f"nvme-{uuid.uuid4()}".encode("utf-8")
+
+    def dispatch_to_trainer(self, drop_last=False):
+        hitted_files_id = []
+        redis_remain_files, nvme_remain_objects = [], []
+        redis_cache_gen = self.redis_cache_exists(self.content["file_hash_list"])
+        print(f"init file list lenght: {len(self.content['file_hash_list'])}")
+        for batch in redis_cache_gen:
+
+            hitted_files_id.extend(batch)
+            if len(batch) < self.total_batch_size:
+                redis_remain_files.extend(batch)
+                break
+            print(f"Sending redis cache to trainer, batch size: {len(batch)}")
+        hitted_files_set = set(hitted_files_id)
+        self.content["file_hash_list"] = [file for file in self.content["file_hash_list"] if file not in hitted_files_set]
+
+        nvme_cache_gen = self.nvme_cache_exists(self.content["file_hash_list"])
+
+        print(f"remain file list lenght: {len(self.content['file_hash_list'])}")
+        for batch in nvme_cache_gen:
+            hitted_files_id.extend(batch)
+            if len(batch) < self.total_batch_size:
+                nvme_remain_objects.extend(batch)
+                break
+            print(f"Sending nvme cache to trainer, batch size: {len(batch)}")
+
+        hitted_files_set = set(hitted_files_id)
+        self.content["file_hash_list"] = [file for file in self.content["file_hash_list"] if file not in hitted_files_set]
+
+        if not drop_last and len(redis_remain_files) + len(nvme_remain_objects) >= self.total_batch_size:
+            redis_remain_objects = self.redis_client.mget(redis_remain_files)
+            last_batch = redis_remain_objects + nvme_remain_objects
+            last_batch = last_batch[:self.total_batch_size]
+            print(f"Sending last batch to trainer, batch size: {len(last_batch)}")
 
     def dispatch_to_worker(self):
-        pass
+        shard = self._sharding(self.content["file_hash_list"])
+        for worker_id, file_hash_list in shard.items():
+            # self.skt.send_multipart([worker_id, dill.dumps(file_hash_list)])
+            print(f"Sending batch to worker{worker_id}, batch size: {len(file_hash_list[0])}, iteration number: {len(file_hash_list)}")
 
     def redis_cache_exists(self, keys):
         pipe = self.redis_client.pipeline()
@@ -95,7 +133,7 @@ class Dispatcher:
         if existing_keys:
             yield existing_keys
 
-    def nvme_cache_exists(self, keys, directory):
+    def nvme_cache_exists(self, keys):
         existing_objects = []
         object_cache = LRU_Cache(1000)  # Cache 10000 objects in memory
         key_counts = Counter(keys)
@@ -105,9 +143,8 @@ class Dispatcher:
             if obj is not None:
                 existing_objects.extend([obj] * key_counts[key])
             else:
-                filepath = os.path.join(directory, key)
+                filepath = os.path.join(self.nvme_cache_directory, key)
                 if os.path.isfile(filepath):
-                    print("reading from nvme")
                     # with open(filepath, 'rb') as file:
                     #     obj = dill.load(file)
                     #     object_cache.put(key, obj)
@@ -124,7 +161,8 @@ class Dispatcher:
         if existing_objects:
             yield existing_objects
 
-    def _sharding(self, uncache_files, workers):
+    def _sharding(self, uncache_files):
+        workers = self.content["preprocessing_services"]
         # Create a round-robin cycle of workers, where each worker is repeated according to its batch size
         worker_cycle = cycle(worker for worker in workers
                              for _ in range(workers[worker]['batch_size']))
@@ -150,11 +188,16 @@ class Dispatcher:
                 obj = dill.load(file)
         return obj
 
+    def start_dispatching(self):
+        self.dispatch_to_trainer()
+        self.dispatch_to_worker()
+
 
 # Example usage:
 if __name__ == '__main__':
+    os.environ["NVME_CACHE_DIRECTORY"] = "/home/jcsu/Dev/nvme_cache"
     import hashlib
-    id_set = [hashlib.md5(str(i).encode()).hexdigest() for i in range(100000, 150000, 30)]
+    id_set = [hashlib.md5(str(i).encode()).hexdigest() for i in range(0, 200000, 10)]
     file_hash_list = id_set * 2
     test_message = {
         "file_hash_list": file_hash_list,
@@ -175,17 +218,11 @@ if __name__ == '__main__':
     }
 
     # random choose 3333 files to be cached
-    test_cached = [hashlib.md5(str(i).encode()).hexdigest() for i in range(0, 100000, 30)]
+    redis_cached_key = [hashlib.md5(str(i).encode()).hexdigest() for i in range(0, 100000, 30)]
+    nvme_cached_key = [hashlib.md5(str(i).encode()).hexdigest() for i in range(100000, 200000, 30)]
 
-    print(f"Total number of files: {len(test_message['file_hash_list'])}, searching for {len(test_cached)} files")
+    print(len([i for i in file_hash_list if i in nvme_cached_key]))
+    print(f"Total number of files: {len(test_message['file_hash_list'])}, searching for cached files in Redis with {len(redis_cached_key)} keys and in NVME with {len(nvme_cached_key)} keys")
 
     dispat = Dispatcher(test_message)
-    # b = dispat._sharding(test_cached, test_message['preprocessing_services'])
-    # for i in b.keys():
-    #     print(i, len(b[i][-1]))
-
-    import time
-    start_time = time.time()
-    for i in dispat.nvme_cache_exists(file_hash_list, '/home/jcsu/Dev/nvme_cache'):
-        print(len(i), len(set(i)))
-    print(f"Time elapsed: {time.time() - start_time}")
+    dispat.start_dispatching()
