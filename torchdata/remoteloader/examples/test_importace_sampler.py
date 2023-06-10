@@ -35,10 +35,20 @@ class SubstituteIterDataPipe(IterDataPipe):
         return len(self.source_datapipe)
 
 
-def order_by_loss(info):
-    sorted_result = sorted(info.items(), key=lambda item: item[1]['loss_importance'])
+@functional_datapipe("evict")
+class EvictIterDataPipe(IterDataPipe):
+    def __init__(self, source_datapipe: IterDataPipe[str], substitute_hash_list: Optional[list] = None):
+        self.source_datapipe = source_datapipe
+        self.substitute_hash_list = substitute_hash_list
+
+    def __iter__(self) -> Iterator:
+        pass
+
+
+def order_by(info, key):
+    sorted_result = sorted(info.items(), key=lambda item: item[1][key])
     sorted_ids = [item[0] for item in sorted_result]
-    # return sorted_ids
+
     yield from sorted_ids
 
 
@@ -60,7 +70,7 @@ def sample_data(data, num_samples=100, replace=True):
 
     # Compute probabilities from the normal distribution
     probabilities = norm.pdf(loss_info, mean, std_dev)
-    
+
     # Normalize the probabilities so they sum to 1
     probabilities = probabilities / np.sum(probabilities)
 
@@ -69,7 +79,7 @@ def sample_data(data, num_samples=100, replace=True):
 
     # shuffle samples
     np.random.shuffle(samples)
-    
+
     return samples
 
 
@@ -95,7 +105,8 @@ if __name__ == "__main__":
         #     print(i, result[i]["loss_info"])
         # print(len(set(sample_data(result))), len(result.keys()))
 
-        print(result["9d8586390d0f8bb8578c5ff8943ffc02"])
+        # print(result["9d8586390d0f8bb8578c5ff8943ffc02"])
+        print(rank_info)
 
         # print(_order_by_loss(result))
         sample_list = sample_data(result, len(result.keys()))
@@ -104,13 +115,13 @@ if __name__ == "__main__":
         _path = "/home/jcsu/Dev/motivation/dataset/256_ObjectCategories"
         dp = IterableWrapper([_path]).list_files(recursive=True).shuffle().sharding_filter().substitute()
         dp2 = IterableWrapper([_path]).list_files(recursive=True).shuffle().sharding_filter().substitute(sample_list)
-        import time
-        start_time = time.time()
-        for i in dp2:
-            print(i)
-        t1 = time.time()-start_time
+        # import time
+        # start_time = time.time()
+        # for i in dp2:
+        #     print(i)
+        # t1 = time.time()-start_time
 
-        start_time = time.time()
-        for i in dp:
-            print(i)
-        print(time.time()-start_time, t1)
+        # start_time = time.time()
+        # for i in dp:
+        #     print(i)
+        # print(time.time()-start_time, t1)
