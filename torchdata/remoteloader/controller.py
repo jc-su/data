@@ -110,10 +110,6 @@ class Controller:
     def encode_datapipe(self, serialized_datapipe):
         return base64.b64encode(serialized_datapipe).decode('utf-8')
 
-    def sharding(self, data_list, _num_workers):
-        shards = np.array_split(data_list, _num_workers)
-        return shards
-
     def get_filelist_dp(self, _datapipe):
         def recursive_remove(graph):
             for _, value in graph.items():
@@ -144,6 +140,36 @@ class Controller:
         )
 
         return new_dp
+
+    def importance_sampling(self, data, num_samples=100, replace=True):
+        # Set seed for reproducibility
+        np.random.seed(0)
+
+        # Extract keys and corresponding 'loss_rank' values
+        keys = []
+        loss_info = []
+        for key, value in data.items():
+            keys.append(key)
+            loss_info.append(value['loss_info'])
+        loss_info = np.array(loss_info)
+
+        # Compute mean and standard deviation of the data
+        mean = np.max(loss_info)
+        std_dev = np.std(loss_info)
+
+        # Compute probabilities from the normal distribution
+        probabilities = norm.pdf(loss_info, mean, std_dev)
+
+        # Normalize the probabilities so they sum to 1
+        probabilities = probabilities / np.sum(probabilities)
+
+        # Use np.random.choice to generate samples
+        samples = np.random.choice(keys, size=num_samples, replace=replace, p=probabilities)
+
+        # shuffle samples
+        np.random.shuffle(samples)
+
+        return samples
 
 
 if __name__ == "__main__":

@@ -35,16 +35,6 @@ class SubstituteIterDataPipe(IterDataPipe):
         return len(self.source_datapipe)
 
 
-@functional_datapipe("evict")
-class EvictIterDataPipe(IterDataPipe):
-    def __init__(self, source_datapipe: IterDataPipe[str], substitute_hash_list: Optional[list] = None):
-        self.source_datapipe = source_datapipe
-        self.substitute_hash_list = substitute_hash_list
-
-    def __iter__(self) -> Iterator:
-        pass
-
-
 def order_by(info, key):
     sorted_result = sorted(info.items(), key=lambda item: item[1][key])
     sorted_ids = [item[0] for item in sorted_result]
@@ -52,7 +42,7 @@ def order_by(info, key):
     yield from sorted_ids
 
 
-def sample_data(data, num_samples=100, replace=True):
+def importance_sampling(data, num_samples=100, replace=True):
     # Set seed for reproducibility
     np.random.seed(0)
 
