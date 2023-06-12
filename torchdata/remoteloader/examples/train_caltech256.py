@@ -57,30 +57,38 @@ def Caltech256(_path):
     return dp
 
 
-
 def cal_loss_rank(loss_tensor):
     # total_sum, sublist_sums = loss_tensor.sum(), loss_tensor.sum(dim=1)
     # rank_tensor = (loss_tensor.view(-1) * total_sum) / sublist_sums.repeat(loss_tensor.size(1))
     total_sum, sublist_sums = loss_tensor.sum(), loss_tensor.sum(dim=1, keepdim=True)
 
-    loss_tensor.div_(sublist_sums) # equivalent to loss_tensor = loss_tensor / sublist_sums
+    loss_tensor.div_(sublist_sums)  # equivalent to loss_tensor = loss_tensor / sublist_sums
+    sublist_sums.div_(total_sum)  # equivalent to sublist_sums = sublist_sums / total_sum
 
     # Multiply total_sum
-    rank_tensor = loss_tensor.mul_(total_sum) # equivalent to rank_tensor = loss_tensor * total_sum
+    rank_tensor = loss_tensor.mul_(total_sum)  # equivalent to rank_tensor = loss_tensor * total_sum
     return rank_tensor
 
+
 if __name__ == "__main__":
+    os.environ["CONTROLLER_IP"] = "localhost"
+    os.environ["CONTROLLER_PORT"] = "5556"
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     data_path = "/home/jcsu/Dev/motivation/dataset/256_ObjectCategories"
     rs = MultiProcessingReadingService(num_workers=2)
-    dl = DataLoader2(
+    # dl = DataLoader2(
+    #     Caltech256(data_path),
+    #     reading_service=rs,
+    #     )
+    dl = RemoteDataloader(
         Caltech256(data_path),
         reading_service=rs,
-        )
-
+        node_type=Worker,
+    )
+    from torch.autograd import Variable
     model = models.resnet18(weights=None).to(device)
 
-    criterion = nn.CrossEntropyLoss(reduction='none')
+    criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.01)
 
     scaler = torch.cuda.amp.GradScaler()
@@ -95,33 +103,39 @@ if __name__ == "__main__":
             collated_batch = mini_batch
             images = collated_batch["image"].to(device)
             labels = collated_batch["cls"].to(device)
+            # images = Variable(images, requires_grad=True)
+            # labels = Variable(labels)
             data_id = collated_batch["id"]
             optimizer.zero_grad()
             id_list.append(data_id)
             start_time = time.time()
             with torch.cuda.amp.autocast():
-                outputs = model(images)
+                with dl.recored_compute_time(data_id):
+                    outputs = model(images)
                 loss = criterion(outputs, labels)
-                loss_list.append(loss)
-            compute_time_list.append(time.time() - start_time)
-            print(f"Batch {idx}")
-                # print(f"Batch {idx} loss: {loss}")
+                # dl.update_loss_info(data_id, loss)
+                # loss_list.append(loss)
             optimizer.zero_grad()
-            train_loss = loss.mean()
-            train_loss_list.append(train_loss)
-            scaler.scale(train_loss).backward()
+            # train_loss_list.append(train_loss)
+            scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
 
             scaler.step(optimizer)
             scaler.update()
-        # loss_tensor = torch.stack(loss_list)
-        loss_tensor = torch.stack(loss_list)
-        loss_relatively = cal_loss_rank(loss_tensor).detach().cpu().numpy()
-        print(loss_relatively)
-        rank_info = cal_loss_rank(loss_tensor).argsort().detach().cpu().numpy()
-        # zip(id_list, rank_tensor)
+            # output_grad = torch.autograd.grad(loss, outputs, retain_graph=True)
+            # images.grad.view(images.shape[0], -1).sum(dim=1)
+            print(f"time {time.time() - start_time}")
+            # print(f"gredient {images.grad.view(images.shape[0], -1).sum(dim=1)}")
         import dill
-        dill.dump(id_list, open(f"loss_time_archive/id_list_{epoch}.pkl", "wb"))
-        dill.dump(loss_relatively, open(f"loss_time_archive/loss_tensor_{epoch}.pkl", "wb"))
-        dill.dump(compute_time_list, open(f"loss_time_archive/compute_time_list_{epoch}.pkl", "wb"))
-        dill.dump(rank_info, open(f"loss_time_archive/rank_info_{epoch}.pkl", "wb"))
+        dill.dump(dl.curr_importance_info, open(f"importance_info_{epoch}.pkl", "wb"))
+        # # loss_tensor = torch.stack(loss_list)
+        # loss_tensor = torch.stack(loss_list)
+        # loss_relatively = cal_loss_rank(loss_tensor).detach().cpu().numpy()
+        # print(loss_relatively)
+        # rank_info = cal_loss_rank(loss_tensor).argsort().detach().cpu().numpy()
+        # # zip(id_list, rank_tensor)
+        # import dill
+        # dill.dump(id_list, open(f"loss_time_archive/id_list_{epoch}.pkl", "wb"))
+        # dill.dump(loss_relatively, open(f"loss_time_archive/loss_tensor_{epoch}.pkl", "wb"))
+        # dill.dump(compute_time_list, open(f"loss_time_archive/compute_time_list_{epoch}.pkl", "wb"))
+        # dill.dump(rank_info, open(f"loss_time_archive/rank_info_{epoch}.pkl", "wb"))
