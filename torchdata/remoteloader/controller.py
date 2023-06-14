@@ -11,7 +11,7 @@ from torchdata.dataloader2.communication.queue import (LocalQueue,
                                                        ThreadingQueue)
 from torchdata.dataloader2.graph import find_dps, replace_dp
 from torchdata.datapipes.iter import IterDataPipe, Filter
-from .utils import find_dp, spawn_worker
+from scipy.stats import norm
 
 
 class Controller:
@@ -46,25 +46,26 @@ class Controller:
 
     def process_requests(self):
         def init_handler(message):
-            id = message["id"]
+            client_id = message["id"]
             if id not in self.hash_table:
-                self.hash_table[id] = {}
-                self.hash_table[id]["gpu_status"] = []
-                self.hash_table[id]["loss"] = []
-                self.hash_table[id]["compute_time"] = []
-                self.hash_table[id]["datapipe"] = message["datapipe"]
-                self.hash_table[id]["worker_list"] = []
-                if "num_worker" in message:
-                    self.hash_table[id]["num_worker"] = message["num_worker"]
+                self.hash_table[client_id] = {}
+                self.hash_table[client_id]["datapipe"] = message["datapipe"]
+                self.hash_table[client_id]["batch_size"] = message["batch_size"]
+                self.hash_table[client_id]["preprocessing_services"]["init_worker"]["batch_size"] = message["batch_size"]
+                self.hash_table[client_id]["trainer_status"] = []
+                self.hash_table[client_id]["curr_importance_info"] = None
+                self.hash_table[client_id]["prev_importance_info"] = None
 
-        def status_update_handler(message):
-            self.hash_table[message["id"]]["gpu_status"].extend(message["gpu_status"])
+                if "init_process_num" in message:
+                    self.hash_table[client_id]["preprocessing_services"]["init_process_num"] = message["init_process_num"]
 
-        def loss_update_handler(message):
-            self.hash_table[message["id"]]["loss_info"].extend(message["loss_info"])
+        def trainer_status_update_handler(message):
+            self.hash_table[message["id"]]["trainer_status"] = message["trainer_status"]
 
-        def compute_time_update_handler(message):
-            self.hash_table[message["id"]]["compute_time_info"].extend(message["compute_time_info"])
+        def importance_update_handler(message):
+            client_id = message["id"]
+            self.hash_table[client_id]["prev_importance_info"] = self.hash_table[id]["curr_importance_info"]
+            self.hash_table[client_id]["curr_importance_info"] = message["importance_info"]
 
         def forward_dp_handler(message):
             context = zmq.Context()
@@ -74,10 +75,8 @@ class Controller:
 
         message_handlers = {
             "init": init_handler,
-            "status_update": status_update_handler,
-            "loss_update": loss_update_handler,
-            "time_update": compute_time_update_handler,
-            "forward_dp": forward_dp_handler
+            "trainer_status_update": trainer_status_update_handler,
+            "importance_update": importance_update_handler,
         }
 
         for _ in range(self.req_len):
@@ -90,22 +89,14 @@ class Controller:
                 handler(message)
             else:
                 raise Exception(f"Unknown message type: {message_type}")
-            # dp = dill.loads(message["datapipe"])
-            # list_dp = dill.loads(message["list_datapipe"])
-            # # print(self.remove_dp(dp))
-            # data_list = [i for i in list_dp]
-            # print(data_list)
-            # new_dp = self.insert_dp(dp, data_list[:len(data_list)//2], list_dp)
-            # for i in new_dp:
-            #     print(i)
 
             self.completed_queue.put(message["id"])
 
+    def _get_incoming_task(self, block=True, timeout=0):
+        return self.incoming_queue.get(block, timeout)
+
     def _get_completed_task(self, block=True, timeout=0):
         return self.completed_queue.get(block, timeout)
-
-    def placement(self):
-        pass
 
     def encode_datapipe(self, serialized_datapipe):
         return base64.b64encode(serialized_datapipe).decode('utf-8')

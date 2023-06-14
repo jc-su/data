@@ -4,17 +4,23 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from functools import reduce
+from functools import partial, reduce
 from typing import Iterable, Optional, Union
 
 import dill
-import numpy as np
+import redis
 import zmq
+from torch.utils.data.datapipes.iter import Collator
 
 from torchdata.dataloader2 import DataLoader2
 from torchdata.dataloader2.adapter import Adapter
-from torchdata.dataloader2.graph import DataPipe, traverse_dps
+from torchdata.dataloader2.graph import (DataPipe, find_dps, replace_dp,
+                                         traverse_dps)
 from torchdata.dataloader2.reading_service import ReadingServiceInterface
+from torchdata.datapipes.iter import Batcher
+from torchdata.datapipes.iter import IterableWrapper, FileLister
+from torch.utils.data.datapipes.iter import Collator, Shuffler, ShardingFilter
+from torchdata.remoteloader.substitute import SubstituteIterDataPipe
 
 from .agent import GPUAgent
 
@@ -38,9 +44,9 @@ class RemoteDataloader(DataLoader2):
 
     Args:
         datapipe: The datapipe to load data from.
-        datapipe_adapter_fn: The adapter function to apply to the datapipe.
+        datapipe_adapter_fn: The adapter function to use to adapt the datapipe.
         reading_service: The reading service to use to load data from the datapipe.
-        node_type: The type of the node, can be "TRAINER" or "PREPROCESSING_SERVICE"
+        node_type: The type of node to use. Either Worker or Trainer.
     """
 
     def __init__(
@@ -51,9 +57,14 @@ class RemoteDataloader(DataLoader2):
         node_type: Optional[Union[Worker, Trainer]] = Trainer,
     ):
         super().__init__(datapipe, datapipe_adapter_fn, reading_service)
-
-        # serialize_datapipe(self.datapipe) as id
-        self.dp_id = hashlib.sha1(dill.dumps(traverse_dps(self.datapipe))).hexdigest()
+        replace_dp(
+            traverse_dps(self.datapipe),
+            find_dps(traverse_dps(self.datapipe), Shuffler)[0],
+            SubstituteIterDataPipe(find_dps(traverse_dps(self.datapipe), FileLister)[0])
+        )
+        self.dp_id = hashlib.sha1(dill.dumps(self.datapipe)).hexdigest()
+        self.collect_fn = find_dps(traverse_dps(self.datapipe), Collator)[0].fn
+        self.batch_size = find_dps(traverse_dps(self.datapipe), Batcher)[0].batch_size
 
         self.controller_ip = os.environ.get("CONTROLLER_IP")
         self.controller_port = os.environ.get("CONTROLLER_PORT")
@@ -66,21 +77,23 @@ class RemoteDataloader(DataLoader2):
 
         self.worker_len = 1
         self.epoch = 0
-        self.batch_size = 1
-        self.compute_time_info = {}
+
+        self.curr_importance_info = {}
+        self.prev_importance_info = {}
+
+        self.redis_client = redis.Redis(host="localhost", port=6379, db=0)
 
         if self.node_type == Trainer:
             # self.agent = GPUAgent()
             # threading.Thread(target=self.agent.run).start()
             self.payload = {"type": "init", "id": self.dp_id, "datapipe": dill.dumps(self.datapipe)}
             if self.reading_service is not None:
-                self.payload["num_workers"] = self.reading_service.num_workers
+                self.payload["process_num"] = self.reading_service.num_workers
 
             self._send_to_controller(self.payload)
 
             self.ctx = zmq.Context()
             self.pull_skt = self.ctx.socket(zmq.PULL)
-            # self.pull_skt.bind("tcp://*:3000")
             self.pull_skt.connect(f"tcp://localhost:3000")
             self.poller = zmq.Poller()
             self.poller.register(self.pull_skt, zmq.POLLIN)
@@ -97,12 +110,12 @@ class RemoteDataloader(DataLoader2):
 
             # self.worker_id = os.getenv('HOSTNAME') + "-" + str(os.getpid())
             self.worker_id = str(uuid.uuid4()).encode("utf-8")
-            self._send_to_controller({"type": "register", "id": self.worker_id})
+            # self._send_to_controller({"type": "register", "id": self.worker_id})
 
             @atexit.register
             def termination_handler(sig=None, frame=None):
                 if os.getpid() == os.getpgid(0):
-                    self._send_to_trainer("END")
+                    self.send_to_trainer("END")
                     sys.exit(1)
                 sys.exit(0)
             signal.signal(signal.SIGTERM, termination_handler)
@@ -119,6 +132,7 @@ class RemoteDataloader(DataLoader2):
                 if self.pull_skt in events and events[self.pull_skt] == zmq.POLLIN:
                     try:
                         worker_id, messages = self.pull_skt.recv_multipart()
+                        print(f"Received {worker_id.decode('utf-8')}")
 
                         data = dill.loads(messages)
                         id_set.add(worker_id)
@@ -128,26 +142,55 @@ class RemoteDataloader(DataLoader2):
                             if not id_set:
                                 break
                             continue
-                        print(f"Received {worker_id.decode('utf-8')}")
+                        if "cache" in worker_id:
+                            unique_data = list(set(data))  # Get unique data keys
+                            cache_data = self.redis_client.mget(unique_data)
+                            data_dict = dict(zip(unique_data, cache_data))  # Map unique keys to their data
+
+                            # Replicate data for each key in data
+                            replicated_data = [data_dict[key] for key in data if key in data_dict]
+
+                            self.batch_size = len(replicated_data)
+                            # yield self._map_collate_fn(replicated_data)
+                            yield replicated_data
+                            continue
+
                         minibatch = [data for _ in id_set]
 
                         # flatten the minibatch received from multiple workers
                         # functools.reduce has better performance than extending from a empty list
                         minibatch = reduce(operator.iconcat, minibatch, [])
                         self.batch_size = len(minibatch)
+                        # yield self._map_collate_fn(minibatch)
                         yield minibatch
                     except Exception as e:
                         print(e)
                         continue
         else:
             raise Exception("Please specify the node type")
-    
+
+    def update_loss_info(self, keys, loss_tensor):
+        loss_info = loss_tensor.view(-1).tolist()
+
+        for i, key in enumerate(keys):
+            if key not in self.curr_importance_info:
+                self.curr_importance_info[key] = {}
+            self.curr_importance_info[key]['loss'] = loss_info[i]
+
     @contextmanager
-    def recored_compute_time(self, key):
+    def recored_compute_time(self, keys):
         start = time.time()
         yield
-        end = time.time()
-        self.compute_time_list.append((key, end - start))
+        end = time.time() - start
+        for key in keys:
+            if key not in self.curr_importance_info:
+                self.curr_importance_info[key] = {}
+            self.curr_importance_info[key]['compute_time'] = end
+
+    def _evict_cache(self, key_batch, cached_keys):
+        for key in key_batch:
+            if key in cached_keys and self.curr_importance_info[key] > self.prev_importance_info[key]:
+                self.redis_client.delete(key)
 
     def _send_to_controller(self, message):
         self.controller_skt.send_pyobj(message, flags=zmq.NOBLOCK)
@@ -160,24 +203,5 @@ class RemoteDataloader(DataLoader2):
     def send_to_trainer(self, message):
         self.push_skt.send_multipart([self.worker_id, dill.dumps(message)])
 
-    def _tweak_batch_size(self, _batch_size):
-        self.datapipe.batch.args[2].batch_size = _batch_size
-
-    def _tweak_num_workers(self, _num_workers):
-        self.reading_service.num_workers = _num_workers
-
-    def cal_loss_rank(self, loss_tensor):
-        pass
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        if self.node_type == Trainer:
-            return super().__exit__(exc_type, exc_value, traceback)
-        elif self.node_type == Worker:
-            import sys
-            if os.getpid() == os.getpgid(0):
-                print("Terminating worker")
-                self._send_to_trainer("END")
-                sys.exit(1)
-            sys.exit(0)
-        else:
-            raise Exception("Please specify the node type")
+    def _update_importance_info(self):
+        self.prev_importance_info = self.curr_importance_info

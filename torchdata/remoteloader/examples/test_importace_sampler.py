@@ -13,26 +13,7 @@ from torchdata.datapipes.iter import IterableWrapper, IterDataPipe
 U = Union[bytes, bytearray, str]
 
 
-@functional_datapipe("substitute")
-class SubstituteIterDataPipe(IterDataPipe):
-    def __init__(self, source_datapipe: IterDataPipe[str], substitute_hash_list: Optional[list] = None):
-        self.source_datapipe = source_datapipe
-        self.substitute_hash_list = substitute_hash_list
 
-    def __iter__(self) -> Iterator:
-        if self.substitute_hash_list is not None:
-            # Create a dictionary mapping hash ids to file names
-            hash_to_file = {hashlib.md5(file_name.encode()).hexdigest(): file_name for file_name in self.source_datapipe}
-
-            # For each hash id in substitute_hash_list, yield the corresponding file name
-            for hash_id in self.substitute_hash_list:
-                if hash_id in hash_to_file:
-                    yield hash_to_file[hash_id]
-        else:
-            yield from self.source_datapipe
-
-    def __len__(self) -> int:
-        return len(self.source_datapipe)
 
 
 def order_by(info, key):
@@ -49,9 +30,10 @@ def importance_sampling(data, num_samples=100, replace=True):
     # Extract keys and corresponding 'loss_rank' values
     keys = []
     loss_info = []
+    num_samples = max(num_samples, len(data))
     for key, value in data.items():
         keys.append(key)
-        loss_info.append(value['loss_info'])
+        loss_info.append(value['loss'])
     loss_info = np.array(loss_info)
 
     # Compute mean and standard deviation of the data
@@ -79,32 +61,32 @@ if __name__ == "__main__":
     id_path = "loss_time_archive/id_list_{}.pkl"
     rank_path = "loss_time_archive/rank_info_{}.pkl"
     for i in range(1):
-        loss_info = dill.load(open(loss_path.format(i), "rb"))
-        compute_time_info = dill.load(open(compute_time_path.format(i), "rb"))
-        id_list = dill.load(open(id_path.format(i), "rb"))
-        rank_info = dill.load(open(rank_path.format(i), "rb"))
-        id_list = np.array(id_list)
-        compute_time_info = np.array(compute_time_info)
-        # print(compute_time_info.max(), compute_time_info.min(), compute_time_info.std())
-        result = {
-            str(data_id): {"loss_info": float(loss), "compute_time": float(compute_time)}
-            for i, compute_time in enumerate(compute_time_info)
-            for data_id, loss in zip(id_list[i], loss_info[i])
-        }
-        # for i in result:
-        #     print(i, result[i]["loss_info"])
-        # print(len(set(sample_data(result))), len(result.keys()))
+        # loss_info = dill.load(open(loss_path.format(i), "rb"))
+        # compute_time_info = dill.load(open(compute_time_path.format(i), "rb"))
+        # id_list = dill.load(open(id_path.format(i), "rb"))
+        # rank_info = dill.load(open(rank_path.format(i), "rb"))
+        # id_list = np.array(id_list)
+        # compute_time_info = np.array(compute_time_info)
+        # # print(compute_time_info.max(), compute_time_info.min(), compute_time_info.std())
+        # result = {
+        #     str(data_id): {"loss_info": float(loss), "compute_time": float(compute_time)}
+        #     for i, compute_time in enumerate(compute_time_info)
+        #     for data_id, loss in zip(id_list[i], loss_info[i])
+        # }
+        # # for i in result:
+        # #     print(i, result[i]["loss_info"])
+        # # print(len(set(sample_data(result))), len(result.keys()))
 
-        # print(result["9d8586390d0f8bb8578c5ff8943ffc02"])
-        print(rank_info)
+        # # print(result["9d8586390d0f8bb8578c5ff8943ffc02"])
+        # print(rank_info)
 
-        # print(_order_by_loss(result))
-        sample_list = sample_data(result, len(result.keys()))
-        print(sample_list)
+        # # print(_order_by_loss(result))
+        # sample_list = sample_data(result, len(result.keys()))
         # print(sample_list)
-        _path = "/home/jcsu/Dev/motivation/dataset/256_ObjectCategories"
-        dp = IterableWrapper([_path]).list_files(recursive=True).shuffle().sharding_filter().substitute()
-        dp2 = IterableWrapper([_path]).list_files(recursive=True).shuffle().sharding_filter().substitute(sample_list)
+        # # print(sample_list)
+        # _path = "/home/jcsu/Dev/motivation/dataset/256_ObjectCategories"
+        # dp = IterableWrapper([_path]).list_files(recursive=True).shuffle().sharding_filter().substitute()
+        # dp2 = IterableWrapper([_path]).list_files(recursive=True).shuffle().sharding_filter().substitute(sample_list)
         # import time
         # start_time = time.time()
         # for i in dp2:
@@ -115,3 +97,10 @@ if __name__ == "__main__":
         # for i in dp:
         #     print(i)
         # print(time.time()-start_time, t1)
+        info = dill.load(open(f"importance_info_{i}.pkl", "rb"))
+
+        print(info)
+        samples = importance_sampling(info)
+        print(samples)
+        print(len(samples))
+        print(len(set(samples)))

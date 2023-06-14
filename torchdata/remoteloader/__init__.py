@@ -1,19 +1,18 @@
+from .agent import GPUAgent
 from .controller import Controller
-from .agent import GPUAgent, SystemAgent
-from .remoteloader import RemoteDataloader, Worker, Trainer
+from .remoteloader import RemoteDataloader, Trainer, Worker
 from .scaling import PrototypePolicy
-from ..datapipes.iter.util.break_pipe import BreakIterDataPipe
-from .utils import *
+from .utils import find_dp, spawn_worker
 
 __all__ = [
-    "BreakIterDataPipe",
     "Controller",
     "GPUAgent",
     "PrototypePolicy",
     "RemoteDataloader",
-    "SystemAgent",
     "Trainer",
     "Worker",
+    "find_dp",
+    "spawn_worker",
 ]
 
 # assert __all__ == sorted(__all__)

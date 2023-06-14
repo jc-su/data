@@ -3,14 +3,12 @@ import os
 from torch import Generator
 import zmq
 import redis
-from itertools import zip_longest
 import dill
 import uuid
 from itertools import cycle
 from collections import Counter
 from filelock import FileLock
-
-
+import mmap
 from collections import OrderedDict
 
 
@@ -55,10 +53,11 @@ class Dispatcher:
     def __init__(self, massage):
         self.content = massage
         self.total_batch_size = sum(worker['batch_size'] for worker in test_message['preprocessing_services'].values())
-        # ctx = zmq.Context()
-        # self.skt = ctx.socket(zmq.PUSH)
-        # self.skt.connect(f"tcp://localhost:2000")
+        ctx = zmq.Context()
+        self.skt = ctx.socket(zmq.PUSH)
+        self.skt.connect(f"tcp://localhost:2000")
         self.redis_client = redis.Redis(host="localhost", port=6379, db=0)
+        # cephfs
         self.nvme_cache_directory = os.environ.get("NVME_CACHE_DIRECTORY")
 
         self.redis_cache_uuid = f"redis-{uuid.uuid4()}".encode("utf-8")
@@ -88,17 +87,25 @@ class Dispatcher:
                 remain_files.extend(batch)
                 break
             print(f"Sending {cache_type} cache to trainer, batch size: {len(batch)}")
+            self.skt.send_multipart([cache_type.encode("utf-8"), dill.dumps(batch)])
         return hitted_files_id, remain_files
 
     def update_file_hash_list(self, hitted_files_id: List) -> None:
         hitted_files_set = set(hitted_files_id)
         self.content["file_hash_list"] = [file for file in self.content["file_hash_list"] if file not in hitted_files_set]
 
-    def dispatch_to_worker(self):
-        shard = self._sharding(self.content["file_hash_list"])
-        for worker_id, file_hash_list in shard.items():
-            # self.skt.send_multipart([worker_id, dill.dumps(file_hash_list)])
-            print(f"Sending batch to worker{worker_id}, batch size: {len(file_hash_list[0])}, iteration number: {len(file_hash_list)}")
+    def dispatch_to_worker(self, drop_last=False):
+        # remainder = len(self.content["file_hash_list"]) % self.total_batch_size
+        # if not drop_last and remainder != 0:
+        #     head_shard = self._sharding(self.content["file_hash_list"][:-remainder])
+        #     last_batch_shard = self._sharding(self.content["file_hash_list"][-remainder:])
+        #     # print(head_shard, last_batch)
+        #     for worker_id, file_hash_list in head_shard.items():
+        #         print(f"Sending {worker_id} shard to worker, batch size: {len(file_hash_list)}")
+        distribued_tasks = self._sharding(self.content["file_hash_list"])
+        for worker_id, file_hash_list in distribued_tasks.items():
+            print(f"Sending {worker_id} shard to worker, batch size: {len(file_hash_list[-1])}")
+            # self.skt.send_multipart([worker_id.encode("utf-8"), dill.dumps(file_hash_list)])
 
     def redis_cache_exists(self, keys):
         pipe = self.redis_client.pipeline()
@@ -147,9 +154,9 @@ class Dispatcher:
 
     def nvme_cache_exists(self, keys):
         existing_objects = []
-        object_cache = LRU_Cache(1000)  # Cache 10000 objects in memory
+        object_cache = LRU_Cache(self.total_batch_size)  # Cache object to avoid reading from disk multiple times
         key_counts = Counter(keys)
-
+        # ceph
         for key in keys:
             obj = object_cache.get(key)
             if obj is not None:
@@ -193,11 +200,17 @@ class Dispatcher:
             batch_counts[worker] += 1
 
         return batches
+    
+    def _sharding_last_batch(self, last_batch):
+        pass
 
     def read_file(self, filepath):
         with FileLock(filepath + ".lock"):
             with open(filepath, 'rb') as file:
-                obj = dill.load(file)
+                # with mmap.mmap(file.fileno(), 0, prot=mmap.PROT_READ) as mm:
+                #     obj = mm.read()
+                obj = file.read()
+            # print(type(obj))
         return obj
 
     def start_dispatching(self):
@@ -215,15 +228,15 @@ if __name__ == '__main__':
         "file_hash_list": file_hash_list,
         "preprocessing_services": {
             "worker_1": {
-                "batch_size": 30,
+                "batch_size": 60,
                 "number_of_process": 1
             },
             "worker_2": {
-                "batch_size": 20,
+                "batch_size": 60,
                 "number_of_process": 1
             },
             "worker_3": {
-                "batch_size": 50,
+                "batch_size": 90,
                 "number_of_process": 2
             }
         },

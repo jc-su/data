@@ -41,7 +41,7 @@ def decode(item):
 def collate_fn(batch):
     if isinstance(batch[0]['image'], torch.Tensor):
         id = [sample['id'] for sample in batch]
-        images = torch.stack([sample['image'] for sample in batch]).to(torch.bfloat16)
+        images = torch.stack([sample['image'] for sample in batch]).to(torch.float16)
         classes = torch.Tensor([sample['cls'] for sample in batch]).to(torch.long)
 
     return {"id": id, "image": images, "cls": classes}
@@ -103,8 +103,8 @@ if __name__ == "__main__":
             collated_batch = mini_batch
             images = collated_batch["image"].to(device)
             labels = collated_batch["cls"].to(device)
-            # images = Variable(images, requires_grad=True)
-            # labels = Variable(labels)
+            images = Variable(images, requires_grad=True)
+            labels = Variable(labels)
             data_id = collated_batch["id"]
             optimizer.zero_grad()
             id_list.append(data_id)
@@ -122,20 +122,10 @@ if __name__ == "__main__":
 
             scaler.step(optimizer)
             scaler.update()
+            
             # output_grad = torch.autograd.grad(loss, outputs, retain_graph=True)
             # images.grad.view(images.shape[0], -1).sum(dim=1)
             print(f"time {time.time() - start_time}")
-            # print(f"gredient {images.grad.view(images.shape[0], -1).sum(dim=1)}")
+            # print(f"gredient {images.grad.view(images.shape[0], -1).norm(dim=1)}")
         import dill
         dill.dump(dl.curr_importance_info, open(f"importance_info_{epoch}.pkl", "wb"))
-        # # loss_tensor = torch.stack(loss_list)
-        # loss_tensor = torch.stack(loss_list)
-        # loss_relatively = cal_loss_rank(loss_tensor).detach().cpu().numpy()
-        # print(loss_relatively)
-        # rank_info = cal_loss_rank(loss_tensor).argsort().detach().cpu().numpy()
-        # # zip(id_list, rank_tensor)
-        # import dill
-        # dill.dump(id_list, open(f"loss_time_archive/id_list_{epoch}.pkl", "wb"))
-        # dill.dump(loss_relatively, open(f"loss_time_archive/loss_tensor_{epoch}.pkl", "wb"))
-        # dill.dump(compute_time_list, open(f"loss_time_archive/compute_time_list_{epoch}.pkl", "wb"))
-        # dill.dump(rank_info, open(f"loss_time_archive/rank_info_{epoch}.pkl", "wb"))
